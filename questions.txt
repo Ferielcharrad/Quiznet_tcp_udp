@@ -1,0 +1,3 @@
+Which protocol is connection-oriented and guarantees reliability? A) TCP  B) UDP|A
+Which protocol may deliver data out of order? A) TCP  B) UDP|B
+Which one uses a 3-way handshake to establish a session? A) TCP  B) UDP|A
