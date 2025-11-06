@@ -214,7 +214,6 @@ def handle_client(conn: socket.socket, addr: Tuple[str, int]) -> None:
     """
     print(f"[SERVER] New connection from {addr}")
 
-    # IMPORTANT: no timeout here, just wait for first data (join message)
     try:
         raw_bytes = conn.recv(4096)
     except OSError:
@@ -227,18 +226,18 @@ def handle_client(conn: socket.socket, addr: Tuple[str, int]) -> None:
 
     raw = raw_bytes.decode(ENCODING, errors="ignore")
 
-    # Expect first message like "join:<username>"
     first_line = raw.strip().splitlines()[0] if raw.strip() else ""
     if first_line.startswith("join:"):
         username = first_line.split(":", 1)[1].strip()
     else:
-        # Fallback: if no "join:" prefix, use the raw line or addr as name
         username = first_line.strip() or f"{addr[0]}:{addr[1]}"
 
-    # Check duplicate usernames
     with clients_lock:
-        for player in players:
-            if player["alive"] and player["username"] == username:
+        client_ip = addr[0]
+
+        # 1) Reject duplicate username
+        for p in players:
+            if p["alive"] and p["username"] == username:
                 safe_send(conn, "error:username_taken")
                 print(
                     "[SERVER] Username "
@@ -247,11 +246,24 @@ def handle_client(conn: socket.socket, addr: Tuple[str, int]) -> None:
                 conn.close()
                 return
 
+        # 2) Reject second connection from the same IP (same machine)
+        for p in players:
+            if p["alive"] and p.get("ip") == client_ip:
+                safe_send(conn, "error:ip_exists")
+                print(
+                    f"[SERVER] IP {client_ip} already connected, "
+                    f"rejecting {username} {addr}"
+                )
+                conn.close()
+                return
+
+        # 3) Register the new player
         player = {
             "sock": conn,
             "username": username,
             "alive": True,
             "last_answer": None,
+            "ip": client_ip,
         }
         players.append(player)
         scores.setdefault(username, 0)

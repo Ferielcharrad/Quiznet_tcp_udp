@@ -211,6 +211,13 @@ def listener_thread(
                         )
                     )
                     ev_queue.put(("log", "[ERROR] Username already taken"))
+                elif code == "ip_exists":
+                    ev_queue.put((
+                    "username_error",
+                    "This machine is already connected. Please use another device."
+                    ))
+                    ev_queue.put(("log", "[ERROR] IP already connected"))
+
                 elif code == "lobby_full":
                     ev_queue.put(
                         (
@@ -311,9 +318,9 @@ if "username_error" not in st.session_state:
 if "my_username" not in st.session_state:
     st.session_state.my_username = ""
 if "server_ip" not in st.session_state:
-    # Example default; change this to the server machine IP when needed
-    st.session_state.server_ip = "192.168.53.115"   #IP Nour
-    st.session_state.server_ip = "172.18.80.1" #IP Ines
+    st.session_state.server_ip = "192.168.1.28"
+    # st.session_state.server_ip = "192.168.53.115"   #IP Nour
+    # st.session_state.server_ip = "172.18.80.1" #IP Ines
 if "listener_started" not in st.session_state:
     st.session_state.listener_started = False
 if "event_queue" not in st.session_state:
@@ -323,7 +330,7 @@ if "event_queue" not in st.session_state:
 process_events()
 
 # Top-level title
-st.title("🧠 Transport Layer Quiz (TCP) — Kahoot-style (TCP)")
+st.title("🧠 Transport Layer Quiz (TCP) ")
 
 # ===================== LOBBY (SIDEBAR) =====================
 # Control flow:
