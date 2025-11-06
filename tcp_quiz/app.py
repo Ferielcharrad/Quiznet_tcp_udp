@@ -312,7 +312,8 @@ if "my_username" not in st.session_state:
     st.session_state.my_username = ""
 if "server_ip" not in st.session_state:
     # Example default; change this to the server machine IP when needed
-    st.session_state.server_ip = "192.168.53.115"
+    st.session_state.server_ip = "192.168.53.115"   #IP Nour
+    st.session_state.server_ip = "172.18.80.1" #IP Ines
 if "listener_started" not in st.session_state:
     st.session_state.listener_started = False
 if "event_queue" not in st.session_state:
