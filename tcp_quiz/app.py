@@ -149,13 +149,14 @@ def listener_thread(
                 }
 
                 ev_queue.put(("question", q_data))
-                ev_queue.put(("page", "question"))  # Show question page
+                ev_queue.put(("page", "question"))  # Force show question page
+                ev_queue.put(("clear_feedback", None))  # Clear old feedback
                 ev_queue.put(("log", f"[QUESTION {qid}] {q_data['stem']}"))
                 continue            # ----- Page transitions -----
             if line.startswith("show:"):
                 page_name = line.split(":", 1)[1]
-                ev_queue.put(("page", page_name))
-                ev_queue.put(("log", f"[PAGE] Showing {page_name}"))
+                # Ignore all show: commands - we control page flow based on question/score events
+                ev_queue.put(("log", f"[PAGE] Server requested {page_name} (ignored)"))
                 continue
             
             # ----- Timer updates -----
@@ -210,6 +211,9 @@ def listener_thread(
             if line.startswith("score:"):
                 payload = line.split(":", 1)[1]
                 ev_queue.put(("score", payload))
+                # Switch to results page ONLY after receiving scoreboard AND after user answered
+                # This ensures we show results after the question is complete
+                ev_queue.put(("show_results_now", None))
                 ev_queue.put(("log", "[SCOREBOARD UPDATED]"))
                 continue
 
@@ -253,21 +257,38 @@ def process_events() -> None:
         if kind == "log":
             append_log(payload)
         elif kind == "question":
+            # When a new question arrives, force the page to "question" and clear everything
             st.session_state.current_question = payload
             st.session_state.last_answer = None
             st.session_state.feedback = ""
             st.session_state.result_message = ""
             st.session_state.question_start_time = time.time()
+            st.session_state.current_page = "question"  # FORCE page to question
             # Set timer to the specific timeout for this question
             st.session_state.time_remaining = payload.get("timeout", 15)
             st.session_state.question_timeout = payload.get("timeout", 15)
         elif kind == "timer":
             st.session_state.time_remaining = payload
         elif kind == "page":
-            st.session_state.current_page = payload
+            # Only allow page transitions to "question" - ignore all others
+            if payload == "question":
+                st.session_state.current_page = payload
+        elif kind == "clear_feedback":
+            # Clear feedback when new question starts
+            st.session_state.feedback = ""
+            st.session_state.result_message = ""
+            st.session_state.last_points_earned = 0
+        elif kind == "show_results_now":
+            # Show results if we're on the question page and have a current question
+            # (User may or may not have answered - could be timeout/skip)
+            if (st.session_state.current_page == "question" and
+                st.session_state.current_question is not None):
+                st.session_state.current_page = "results"
         elif kind == "feedback":
+            # Store feedback but DON'T change page - wait for score update
             st.session_state.feedback = payload
         elif kind == "result_message":
+            # Store result message but DON'T change page - wait for score update
             st.session_state.result_message = payload
         elif kind == "points":
             st.session_state.last_points_earned = payload
@@ -279,6 +300,8 @@ def process_events() -> None:
                 st.session_state.answer_streak = 0
             st.session_state.total_answered += 1
         elif kind == "score":
+            # Update scoreboard data but don't trigger page change here
+            # The "show_results_now" event will handle page transition
             update_scoreboard_from_payload(payload)
         elif kind == "username_error":
             st.session_state.username_error = payload
@@ -681,6 +704,15 @@ with col_main:
     # MULTI-PAGE FLOW: Question → Results → Leaderboard
       # PAGE 1: QUESTION PAGE
     if st.session_state.connected and st.session_state.current_page == "question" and st.session_state.current_question:
+        # Force default background during question phase
+        st.markdown("""
+            <style>
+                .stApp {
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                }
+            </style>
+        """, unsafe_allow_html=True)
+        
         question = st.session_state.current_question
         stem = question["stem"]
         opts = question["options"]
