@@ -1,109 +1,462 @@
-# client_udp.py
+"""
+UDP quiz game client for the Kahoot-style Transport Layer Quiz.
+
+Features:
+- Connect to UDP server with username
+- Receive and display questions in real-time
+- Submit answers (A/B/C/D)
+- See live timer countdown
+- View results with points earned
+- Display leaderboard after each question
+- Rich terminal-based UI with colors
+
+Usage:
+    python client_udp.py <server_ip> <username>
+    
+    Or just run:
+    python client_udp.py
+    
+    Then enter server IP and username when prompted.
+"""
+
 import socket
 import threading
+import time
 import sys
+import os
 
+# Try to import colorama for colored output (optional)
+try:
+    from colorama import init, Fore, Back, Style
+    init(autoreset=True)
+    HAS_COLOR = True
+except ImportError:
+    HAS_COLOR = False
+    # Fallback: define empty color codes
+    class Fore:
+        RED = GREEN = YELLOW = BLUE = MAGENTA = CYAN = WHITE = RESET = ""
+    class Back:
+        RED = GREEN = YELLOW = BLUE = MAGENTA = CYAN = WHITE = BLACK = RESET = ""
+    class Style:
+        BRIGHT = DIM = NORMAL = RESET_ALL = ""
+
+# Server connection settings
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8888
 ENCODING = "utf-8"
-SERVER_PORT = 8888
 
-# Shared state
+# Client state
+sock = None
+running = True
+current_question = None
 current_question_id = None
-current_question_text = None
+question_timeout = 15
+timer_value = 0
+answered = False
+waiting_for_results = False
+my_username = ""
+server_addr = None
 lock = threading.Lock()
 
-def listener(sock: socket.socket):
-    """
-    Background thread:
-    receive messages from server and print them nicely.
-    Also updates the current question.
-    """
-    global current_question_id, current_question_text
 
-    while True:
-        data, addr = sock.recvfrom(4096)
-        msg = data.decode(ENCODING, errors="ignore").strip()
+def clear_screen():
+    """Clear the terminal screen."""
+    os.system('cls' if os.name == 'nt' else 'clear')
 
-        if msg.startswith("question:"):
-            # Format: question:<id>:<text>
-            parts = msg.split(":", 2)
-            if len(parts) >= 3:
-                qid = parts[1]
-                qtext = parts[2]
+
+def print_header():
+    """Print the game header."""
+    print(Fore.CYAN + Style.BRIGHT + "╔════════════════════════════════════════════════════════╗")
+    print(Fore.CYAN + Style.BRIGHT + "║                                                        ║")
+    print(Fore.CYAN + Style.BRIGHT + "║        🎮 QUIZNET - KAHOOT-STYLE UDP CLIENT 🎮        ║")
+    print(Fore.CYAN + Style.BRIGHT + "║                                                        ║")
+    print(Fore.CYAN + Style.BRIGHT + "║           Transport Layer Quiz Competition            ║")
+    print(Fore.CYAN + Style.BRIGHT + "║                                                        ║")
+    print(Fore.CYAN + Style.BRIGHT + "╚════════════════════════════════════════════════════════╝")
+    print()
+
+
+def print_separator(char="═", length=60, color=Fore.CYAN):
+    """Print a separator line."""
+    print(color + char * length)
+
+
+def print_question_box(question_text, question_num, timeout):
+    """Display the current question in a nice box."""
+    print()
+    print_separator("━", 60, Fore.YELLOW)
+    print(Fore.YELLOW + Style.BRIGHT + f"📝 QUESTION {question_num}")
+    print_separator("━", 60, Fore.YELLOW)
+    print()
+    print(Fore.WHITE + Style.BRIGHT + question_text)
+    print()
+    print(Fore.CYAN + f"⏱️  Time limit: {timeout} seconds")
+    print()
+
+
+def print_timer(seconds_left):
+    """Print the countdown timer."""
+    if seconds_left <= 3:
+        color = Fore.RED
+        icon = "⚠️ "
+    elif seconds_left <= 7:
+        color = Fore.YELLOW
+        icon = "⏰ "
+    else:
+        color = Fore.GREEN
+        icon = "⏱️  "
+    
+    # Create a progress bar
+    total_bars = 30
+    filled = int((seconds_left / question_timeout) * total_bars)
+    bar = "█" * filled + "░" * (total_bars - filled)
+    
+    print(f"\r{color}{icon}Time: {seconds_left:2d}s [{bar}] ", end="", flush=True)
+
+
+def print_results(winner, correct_answer, points=None):
+    """Display the results after a question."""
+    print("\n")
+    print_separator("═", 60, Fore.MAGENTA)
+    print(Fore.MAGENTA + Style.BRIGHT + "📊 RESULTS")
+    print_separator("═", 60, Fore.MAGENTA)
+    print()
+    
+    print(Fore.CYAN + Style.BRIGHT + f"✅ Correct Answer: {correct_answer}")
+    print()
+    
+    if winner and winner != "None":
+        print(Fore.YELLOW + Style.BRIGHT + f"🏆 Winner: {winner}")
+        if points:
+            print(Fore.GREEN + Style.BRIGHT + f"   Points: {points}")
+    else:
+        print(Fore.YELLOW + "No one answered correctly")
+    print()
+
+
+def print_feedback(result, points, time_taken):
+    """Display personal feedback."""
+    if result == "correct":
+        print(Fore.GREEN + Style.BRIGHT + "═" * 60)
+        print(Fore.GREEN + Style.BRIGHT + f"✅ CORRECT! You earned {points} points!")
+        print(Fore.GREEN + f"⚡ Answer time: {time_taken}s")
+        print(Fore.GREEN + Style.BRIGHT + "═" * 60)
+    elif result == "wrong":
+        print(Fore.RED + Style.BRIGHT + "═" * 60)
+        print(Fore.RED + Style.BRIGHT + "❌ WRONG! Better luck next time!")
+        print(Fore.RED + Style.BRIGHT + "═" * 60)
+    elif result == "timeout":
+        print(Fore.YELLOW + Style.BRIGHT + "═" * 60)
+        print(Fore.YELLOW + Style.BRIGHT + "⏰ TIME'S UP! You didn't answer in time.")
+        print(Fore.YELLOW + Style.BRIGHT + "═" * 60)
+    print()
+
+
+def print_leaderboard(scores_data):
+    """Display the leaderboard."""
+    print()
+    print_separator("═", 60, Fore.CYAN)
+    print(Fore.CYAN + Style.BRIGHT + "🏆 LEADERBOARD")
+    print_separator("═", 60, Fore.CYAN)
+    print()
+    
+    if scores_data == "EMPTY:0" or not scores_data:
+        print(Fore.YELLOW + "No scores yet.")
+    else:
+        # Parse scores: "user1:100|user2:50|user3:25"
+        entries = scores_data.split("|")
+        for rank, entry in enumerate(entries, 1):
+            if ":" in entry:
+                username, points = entry.split(":", 1)
+                
+                # Highlight current user
+                if username == my_username:
+                    color = Fore.GREEN + Style.BRIGHT
+                    prefix = "➤ "
+                else:
+                    color = Fore.WHITE
+                    prefix = "  "
+                
+                # Add medals for top 3
+                if rank == 1:
+                    medal = "🥇"
+                elif rank == 2:
+                    medal = "🥈"
+                elif rank == 3:
+                    medal = "🥉"
+                else:
+                    medal = f"{rank}."
+                
+                print(f"{prefix}{color}{medal} {username}: {points} pts")
+    
+    print()
+    print_separator("═", 60, Fore.CYAN)
+
+
+def send_message(message: str) -> bool:
+    """Send a message to the server."""
+    try:
+        sock.sendto(message.encode(ENCODING), server_addr)
+        return True
+    except OSError as e:
+        print(Fore.RED + f"\n[ERROR] Failed to send message: {e}")
+        return False
+
+
+def listener():
+    """
+    Background thread that receives messages from the server.
+    
+    Message types:
+    - broadcast:<message> - General broadcast message
+    - question:<id>:<timeout>:<text> - New question
+    - timer:<seconds> - Countdown timer update
+    - show:results - Show results page
+    - show:leaderboard - Show leaderboard page
+    - feedback:<username>:<result>:<points>:<time> - Personal feedback
+    - score:<leaderboard_data> - Leaderboard data
+    """
+    global running, current_question, current_question_id, question_timeout
+    global timer_value, answered, waiting_for_results
+    
+    while running:
+        try:
+            data, addr = sock.recvfrom(4096)
+            msg = data.decode(ENCODING, errors="ignore").strip()
+            
+            if not msg:
+                continue
+            
+            # Parse different message types
+            if msg.startswith("broadcast:"):
+                text = msg.split(":", 1)[1]
+                print(Fore.CYAN + Style.BRIGHT + f"\n📢 {text}")
+                
+                # Special handling for specific broadcasts
+                if "TIMEUP" in msg or "Winner=" in msg:
+                    # Parse: "TIMEUP Correct=A Winner=user1 Points=950"
+                    parts = msg.split()
+                    correct = winner = points = None
+                    
+                    for part in parts:
+                        if part.startswith("Correct="):
+                            correct = part.split("=")[1]
+                        elif part.startswith("Winner="):
+                            winner = part.split("=")[1]
+                        elif part.startswith("Points="):
+                            points = part.split("=")[1]
+                    
+                    if correct:
+                        print_results(winner, correct, points)
+                
+                elif "QUIZ_START" in msg:
+                    clear_screen()
+                    print_header()
+                    print(Fore.GREEN + Style.BRIGHT + "🚀 QUIZ IS STARTING!")
+                    print()
+                
+                elif "QUIZ_END" in msg:
+                    print()
+                    print(Fore.CYAN + Style.BRIGHT + "🎉 QUIZ COMPLETED!")
+                    print()
+            
+            elif msg.startswith("question:"):
+                # Format: "question:<id>:<timeout>:<text>"
+                parts = msg.split(":", 3)
+                if len(parts) >= 4:
+                    question_id = parts[1]
+                    timeout = int(parts[2])
+                    question_text = parts[3]
+                    
+                    with lock:
+                        current_question_id = question_id
+                        current_question = question_text
+                        question_timeout = timeout
+                        answered = False
+                        waiting_for_results = False
+                    
+                    # Clear screen and display question
+                    clear_screen()
+                    print_header()
+                    print_question_box(question_text, question_id, timeout)
+                    print(Fore.GREEN + "Type your answer (A, B, C, or D) and press Enter:")
+                    print()
+            
+            elif msg.startswith("timer:"):
+                # Format: "timer:<seconds_remaining>"
+                seconds = int(msg.split(":", 1)[1])
+                
                 with lock:
-                    current_question_id = qid
-                    current_question_text = qtext
-                print("\n------------------------------")
-                print(f"[QUESTION {qid}] {qtext}")
-                print("Type your answer letter (A/B/C/...) and press Enter.")
-                print("------------------------------")
+                    timer_value = seconds
+                    
+                    # Only show timer if we're in a question and haven't answered
+                    if current_question and not answered and not waiting_for_results:
+                        print_timer(seconds)
+            
+            elif msg.startswith("show:results"):
+                with lock:
+                    waiting_for_results = True
+                print("\n")
+            
+            elif msg.startswith("show:leaderboard"):
+                # Next message will be the leaderboard
+                pass
+            
+            elif msg.startswith("feedback:"):
+                # Format: "feedback:<username>:<result>:<points>:<time>"
+                parts = msg.split(":", 4)
+                if len(parts) >= 5:
+                    username = parts[1]
+                    result = parts[2]
+                    points = parts[3]
+                    time_taken = parts[4]
+                    
+                    if username == my_username:
+                        print_feedback(result, points, time_taken)
+            
+            elif msg.startswith("score:"):
+                # Format: "score:<leaderboard_data>"
+                scores_data = msg.split(":", 1)[1]
+                print_leaderboard(scores_data)
+        
+        except OSError:
+            if running:
+                print(Fore.RED + "\n[ERROR] Connection lost.")
+            running = False
+            break
+        except Exception as e:
+            if running:
+                print(Fore.RED + f"\n[ERROR] Unexpected error: {e}")
+            continue
 
-        elif msg.startswith("broadcast:"):
-            # broadcast:<message>
-            text = msg.split(":", 1)[1]
-            print(f"[SERVER BROADCAST] {text}")
 
-        elif msg.startswith("score:"):
-            # score:user1:3|user2:1|...
-            raw_lb = msg.split(":", 1)[1] if ":" in msg else ""
-            if raw_lb == "EMPTY:0":
-                print("[SCOREBOARD] no scores yet")
+def input_loop():
+    """
+    Main thread that handles user input for answers.
+    """
+    global running, answered, current_question
+    
+    while running:
+        try:
+            if current_question and not answered and not waiting_for_results:
+                user_input = input().strip().upper()
+                
+                if user_input in ("A", "B", "C", "D"):
+                    if send_message(f"answer:{user_input}"):
+                        with lock:
+                            answered = True
+                        print(Fore.GREEN + f"\n✅ Answer '{user_input}' submitted!")
+                        print(Fore.YELLOW + "⏳ Waiting for results...")
+                        print()
+                elif user_input.lower() in ("quit", "exit"):
+                    print(Fore.YELLOW + "\n👋 Disconnecting...")
+                    running = False
+                    break
+                elif user_input:
+                    print(Fore.RED + "Invalid input! Please enter A, B, C, or D.")
             else:
-                print("\n===== SCOREBOARD =====")
-                players = raw_lb.split("|")
-                rank = 1
-                for p in players:
-                    # each p like "username:points"
-                    if ":" in p:
-                        uname, pts = p.split(":", 1)
-                        print(f"{rank}. {uname} -> {pts} pts")
-                        rank += 1
-                print("======================\n")
-
-        else:
-            # fallback raw print
-            print(f"[SERVER MSG] {msg}")
+                time.sleep(0.1)
+        
+        except EOFError:
+            break
+        except KeyboardInterrupt:
+            print(Fore.YELLOW + "\n\n👋 Disconnecting...")
+            running = False
+            break
 
 
 def main():
-    if len(sys.argv) < 3:
-        print("Usage: python client_udp.py <server_ip> <username>")
-        sys.exit(1)
-
-    server_ip = sys.argv[1]
-    username = sys.argv[2]
-
-    # create UDP socket
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setblocking(True)
-
-    server_addr = (server_ip, SERVER_PORT)
-
-    # send join
-    join_msg = f"join:{username}".encode(ENCODING)
-    sock.sendto(join_msg, server_addr)
-    print(f"[CLIENT] Sent join request as '{username}' to {server_ip}:{SERVER_PORT}")
-
-    # start listener thread
-    t = threading.Thread(target=listener, args=(sock,), daemon=True)
-    t.start()
-
-    # main loop: read user input for answers
-    # whenever you type something and press Enter, we send answer:<something>
-    while True:
-        user_input = input().strip()
-        if not user_input:
-            continue
-
-        if user_input.lower() in ("quit", "exit"):
-            print("[CLIENT] Bye.")
-            break
-
-        # send answer
-        ans_msg = f"answer:{user_input}".encode(ENCODING)
-        sock.sendto(ans_msg, server_addr)
-        print(f"[CLIENT] Sent answer '{user_input}'")
-
-    sock.close()
+    """
+    Main entry point for the UDP quiz client.
+    """
+    global running, sock, server_addr, my_username
+    
+    clear_screen()
+    print_header()
+    
+    # Get server address and username
+    print(Fore.CYAN + "Enter server details:")
+    print_separator("-", 60, Fore.CYAN)
+    
+    # Check if command line arguments provided
+    if len(sys.argv) >= 3:
+        server_ip = sys.argv[1]
+        username = sys.argv[2]
+        port = DEFAULT_PORT
+    else:
+        # Interactive input
+        host_input = input(f"Server IP (press Enter for {DEFAULT_HOST}): ").strip()
+        server_ip = host_input if host_input else DEFAULT_HOST
+        
+        port_input = input(f"Server Port (press Enter for {DEFAULT_PORT}): ").strip()
+        if port_input:
+            try:
+                port = int(port_input)
+            except ValueError:
+                print(Fore.RED + "Invalid port number. Using default.")
+                port = DEFAULT_PORT
+        else:
+            port = DEFAULT_PORT
+        
+        # Get username
+        username = ""
+        while not username:
+            username = input("\nEnter your username: ").strip()
+            if not username:
+                print(Fore.RED + "Username cannot be empty!")
+    
+    print()
+    print_separator()
+    print()
+    
+    # Create UDP socket
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setblocking(True)
+        server_addr = (server_ip, port)
+        
+        print(Fore.CYAN + f"Connecting to {server_ip}:{port}...")
+        
+        # Send join request
+        my_username = username
+        if not send_message(f"join:{username}"):
+            print(Fore.RED + "\nFailed to send join request. Exiting...")
+            return
+        
+        print(Fore.GREEN + "✅ Join request sent!")
+        print()
+        print(Fore.CYAN + f"Joined as: {Fore.GREEN + Style.BRIGHT}{username}")
+        print(Fore.YELLOW + "Waiting for the quiz to start...")
+        print()
+        print_separator()
+        print()
+        
+    except OSError as e:
+        print(Fore.RED + f"❌ Connection error: {e}")
+        return
+    
+    # Start listener thread
+    listener_thread = threading.Thread(target=listener, daemon=True)
+    listener_thread.start()
+    
+    # Run input loop in main thread
+    try:
+        input_loop()
+    except KeyboardInterrupt:
+        print(Fore.YELLOW + "\n\n👋 Disconnecting...")
+    finally:
+        running = False
+        if sock:
+            try:
+                sock.close()
+            except:
+                pass
+        
+        print()
+        print(Fore.CYAN + "═" * 60)
+        print(Fore.CYAN + "Thanks for playing! 👋")
+        print(Fore.CYAN + "═" * 60)
+        print()
 
 
 if __name__ == "__main__":

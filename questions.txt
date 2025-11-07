@@ -1,3 +1,13 @@
+# QuizNet - Transport Layer Protocol Questions
+# Format: Question text|Correct_Answer_Letter
+
 Which protocol is connection-oriented and guarantees reliability? A) TCP  B) UDP|A
 Which protocol may deliver data out of order? A) TCP  B) UDP|B
 Which one uses a 3-way handshake to establish a session? A) TCP  B) UDP|A
+Which protocol is faster but less reliable? A) TCP  B) UDP|B
+Which protocol includes flow control mechanisms? A) TCP  B) UDP|A
+Which protocol is used for streaming video and online gaming? A) TCP  B) UDP|B
+Which protocol has a larger header overhead? A) TCP  B) UDP|A
+Which protocol is connection less? A) TCP  B) UDP|B
+Which protocol guarantees packet delivery? A) TCP  B) UDP|A
+Which protocol is better for DNS queries? A) TCP  B) UDP|B
